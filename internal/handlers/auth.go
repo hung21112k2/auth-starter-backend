@@ -3,8 +3,10 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"os"
+	"regexp"
 	"time"
 
 	"auth-backend/internal/models"
@@ -37,6 +39,23 @@ type loginReq struct {
 	Password string `json:"password"`
 }
 
+// ===== Password validation (>=8 chars, >=1 uppercase, >=1 special) =====
+var reUpper = regexp.MustCompile(`[A-Z]`)
+var reSpecial = regexp.MustCompile(`[^A-Za-z0-9]`)
+
+func validatePassword(p string) error {
+	if len(p) < 8 {
+		return errors.New("password must be at least 8 characters")
+	}
+	if !reUpper.MatchString(p) {
+		return errors.New("password must include at least one uppercase letter")
+	}
+	if !reSpecial.MatchString(p) {
+		return errors.New("password must include at least one special character")
+	}
+	return nil
+}
+
 func (h *AuthHandler) Signup(w http.ResponseWriter, r *http.Request) {
 	var in signupReq
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
@@ -45,6 +64,12 @@ func (h *AuthHandler) Signup(w http.ResponseWriter, r *http.Request) {
 	}
 	if in.Email == "" || in.Password == "" || in.FullName == "" {
 		http.Error(w, "missing fields", http.StatusBadRequest)
+		return
+	}
+
+	// password rules
+	if err := validatePassword(in.Password); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
