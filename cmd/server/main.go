@@ -17,7 +17,7 @@ import (
 )
 
 func main() {
-	// Load .env 
+	// Load .env (DEV); PROD có thể dùng biến môi trường hệ thống
 	if err := godotenv.Load(); err != nil {
 		log.Println("No .env file found, using system environment")
 	}
@@ -35,6 +35,7 @@ func main() {
 		log.Fatal("JWT_SECRET is empty")
 	}
 
+	// Connect DB
 	db, err := sqlx.Connect("mysql", dsn)
 	if err != nil {
 		log.Fatalf("cannot connect DB: %v", err)
@@ -53,13 +54,15 @@ func main() {
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.Timeout(60 * time.Second))
 
-	// Public
+	// Public routes
 	r.Route("/auth", func(r chi.Router) {
 		r.Post("/signup", auth.Signup)
 		r.Post("/login", auth.Login)
+		r.Get("/verify", auth.VerifyEmail)   // /auth/verify?token=...
+		r.Post("/resend", auth.ResendVerify) // body: { "email": "..." }
 	})
 
-	// Protected
+	// Protected routes
 	r.Group(func(pr chi.Router) {
 		pr.Use(auth.AuthMiddleware)
 		pr.Get("/auth/me", auth.Me)
