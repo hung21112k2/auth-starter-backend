@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"regexp"
+	"strings"
 	"time"
 
 	"auth-backend/internal/models"
@@ -28,13 +29,18 @@ func NewAuthHandler(users repo.UserRepo, jwtSecret string) *AuthHandler {
 	}
 }
 
+// ====== Request payloads ======
+
 type signupReq struct {
 	Email    string `json:"email"`
+	Username string `json:"username"`
 	Password string `json:"password"`
 	FullName string `json:"full_name"`
 }
 
 type loginReq struct {
+	// Giữ tên trường là "email" để tương thích frontend cũ.
+	// Nếu giá trị KHÔNG chứa '@' sẽ được hiểu là username.
 	Email    string `json:"email"`
 	Password string `json:"password"`
 }
@@ -56,31 +62,38 @@ func validatePassword(p string) error {
 	return nil
 }
 
+// ===== Handlers =====
+
 func (h *AuthHandler) Signup(w http.ResponseWriter, r *http.Request) {
 	var in signupReq
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 		http.Error(w, "invalid json", http.StatusBadRequest)
 		return
 	}
-	if in.Email == "" || in.Password == "" || in.FullName == "" {
+	if in.Email == "" || in.Username == "" || in.Password == "" || in.FullName == "" {
 		http.Error(w, "missing fields", http.StatusBadRequest)
 		return
 	}
-
 	// password rules
 	if err := validatePassword(in.Password); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	// Check duplicate
-	existed, err := h.users.FindByEmail(r.Context(), in.Email)
-	if err != nil {
+	// Check duplicate email
+	if existed, err := h.users.FindByEmail(r.Context(), in.Email); err != nil {
 		http.Error(w, "db error", http.StatusInternalServerError)
 		return
-	}
-	if existed != nil {
+	} else if existed != nil {
 		http.Error(w, "email already used", http.StatusConflict)
+		return
+	}
+	// Check duplicate username
+	if existed, err := h.users.FindByUsername(r.Context(), in.Username); err != nil {
+		http.Error(w, "db error", http.StatusInternalServerError)
+		return
+	} else if existed != nil {
+		http.Error(w, "username already used", http.StatusConflict)
 		return
 	}
 
@@ -93,6 +106,7 @@ func (h *AuthHandler) Signup(w http.ResponseWriter, r *http.Request) {
 
 	user := &models.User{
 		Email:        in.Email,
+		Username:     in.Username,
 		PasswordHash: string(hash),
 		FullName:     in.FullName,
 	}
@@ -112,7 +126,17 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	u, err := h.users.FindByEmail(r.Context(), in.Email)
+	var (
+		u   *models.User
+		err error
+	)
+
+	// Cho phép dùng email hoặc username ở trường "email"
+	if strings.Contains(in.Email, "@") {
+		u, err = h.users.FindByEmail(r.Context(), in.Email)
+	} else {
+		u, err = h.users.FindByUsername(r.Context(), in.Email)
+	}
 	if err != nil {
 		http.Error(w, "db error", http.StatusInternalServerError)
 		return
@@ -129,11 +153,12 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 
 	// Create JWT
 	claims := jwt.MapClaims{
-		"sub":   u.ID,
-		"email": u.Email,
-		"name":  u.FullName,
-		"exp":   time.Now().Add(24 * time.Hour).Unix(),
-		"iss":   "auth-backend",
+		"sub":      u.ID,
+		"email":    u.Email,
+		"username": u.Username,
+		"name":     u.FullName,
+		"exp":      time.Now().Add(24 * time.Hour).Unix(),
+		"iss":      "auth-backend",
 	}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	ss, err := token.SignedString(h.jwtSecret)
@@ -150,19 +175,22 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 type ctxKey string
 
 const (
-	ctxEmail ctxKey = "email"
-	ctxName  ctxKey = "name"
-	ctxUID   ctxKey = "uid"
+	ctxEmail    ctxKey = "email"
+	ctxName     ctxKey = "name"
+	ctxUsername ctxKey = "username"
+	ctxUID      ctxKey = "uid"
 )
 
 func (h *AuthHandler) Me(w http.ResponseWriter, r *http.Request) {
 	email, _ := r.Context().Value(ctxEmail).(string)
 	name, _ := r.Context().Value(ctxName).(string)
+	uname, _ := r.Context().Value(ctxUsername).(string)
 	uid, _ := r.Context().Value(ctxUID).(int64)
 
 	resp := map[string]any{
 		"id":        uid,
 		"email":     email,
+		"username":  uname,
 		"full_name": name,
 	}
 	_ = json.NewEncoder(w).Encode(resp)
@@ -204,7 +232,10 @@ func (h *AuthHandler) AuthMiddleware(next http.Handler) http.Handler {
 		if v, ok := claims["name"].(string); ok {
 			ctx = context.WithValue(ctx, ctxName, v)
 		}
-		if v, ok := claims["sub"].(float64); ok {
+		if v, ok := claims["username"].(string); ok {
+			ctx = context.WithValue(ctx, ctxUsername, v)
+		}
+		if v, ok := claims["sub"].(float64); ok { // JSON number -> float64
 			ctx = context.WithValue(ctx, ctxUID, int64(v))
 		}
 
