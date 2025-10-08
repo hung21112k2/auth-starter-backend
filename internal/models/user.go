@@ -11,4 +11,8 @@ type User struct {
 	IsVerified    bool       `db:"is_verified" json:"is_verified"`
 	VerifyToken   *string    `db:"verify_token" json:"-"`
 	VerifyExpires *time.Time `db:"verify_expires" json:"-"`
+
+	// Cho reset password
+	ResetToken   *string    `db:"reset_token" json:"-"`
+	ResetExpires *time.Time `db:"reset_expires" json:"-"`
 }

@@ -17,52 +17,38 @@ import (
 )
 
 func main() {
-	// Load .env (DEV); PROD có thể dùng biến môi trường hệ thống
 	if err := godotenv.Load(); err != nil {
 		log.Println("No .env file found, using system environment")
 	}
 
-	port := os.Getenv("PORT")
-	if port == "" {
-		port = "8080"
-	}
-	dsn := os.Getenv("DB_DSN")
-	if dsn == "" {
-		log.Fatal("DB_DSN is empty")
-	}
-	secret := os.Getenv("JWT_SECRET")
-	if secret == "" {
-		log.Fatal("JWT_SECRET is empty")
-	}
+	port := os.Getenv("PORT"); if port == "" { port = "8080" }
+	dsn := os.Getenv("DB_DSN"); if dsn == "" { log.Fatal("DB_DSN is empty") }
+	secret := os.Getenv("JWT_SECRET"); if secret == "" { log.Fatal("JWT_SECRET is empty") }
 
-	// Connect DB
 	db, err := sqlx.Connect("mysql", dsn)
-	if err != nil {
-		log.Fatalf("cannot connect DB: %v", err)
-	}
-	db.SetMaxOpenConns(25)
-	db.SetMaxIdleConns(25)
-	db.SetConnMaxIdleTime(0)
+	if err != nil { log.Fatalf("cannot connect DB: %v", err) }
+	db.SetMaxOpenConns(25); db.SetMaxIdleConns(25); db.SetConnMaxIdleTime(0)
 
-	// DI
 	userRepo := repo.NewUserRepo(db)
 	auth := handlers.NewAuthHandler(userRepo, secret)
 
-	// Router
 	r := chi.NewRouter()
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.Timeout(60 * time.Second))
 
-	// Public routes
+	// Public
 	r.Route("/auth", func(r chi.Router) {
 		r.Post("/signup", auth.Signup)
 		r.Post("/login", auth.Login)
-		r.Get("/verify", auth.VerifyEmail)   // /auth/verify?token=...
-		r.Post("/resend", auth.ResendVerify) // body: { "email": "..." }
+		r.Get("/verify", auth.VerifyEmail)   // ?token=
+		r.Post("/resend", auth.ResendVerify) // { email }
+		// Forgot / Reset
+		r.Post("/forgot", auth.ForgotPassword)
+		r.Post("/reset",  auth.ResetPassword)
 	})
 
-	// Protected routes
+	// Protected
 	r.Group(func(pr chi.Router) {
 		pr.Use(auth.AuthMiddleware)
 		pr.Get("/auth/me", auth.Me)

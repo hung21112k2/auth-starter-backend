@@ -52,68 +52,75 @@ func validatePassword(p string) error {
 
 func randToken(n int) (string, error) {
 	b := make([]byte, n)
-	if _, err := rand.Read(b); err != nil {
-		return "", err
-	}
+	if _, err := rand.Read(b); err != nil { return "", err }
 	return hex.EncodeToString(b), nil
 }
 
-// Gửi email verify: hỗ trợ 587 (STARTTLS) và 465 (implicit TLS)
+// ===== send verify email =====
 func (h *AuthHandler) sendVerifyEmail(toEmail, link string) error {
-	host := os.Getenv("SMTP_HOST")
-	port := os.Getenv("SMTP_PORT")
-	user := os.Getenv("SMTP_USER")
-	pass := os.Getenv("SMTP_PASS")
-	from := os.Getenv("SMTP_FROM")
-	if from == "" { from = user }
-
+	host, port := os.Getenv("SMTP_HOST"), os.Getenv("SMTP_PORT")
+	user, pass := os.Getenv("SMTP_USER"), os.Getenv("SMTP_PASS")
+	from := os.Getenv("SMTP_FROM"); if from == "" { from = user }
 	if host == "" || port == "" || user == "" || pass == "" {
 		return fmt.Errorf("missing SMTP config")
 	}
-
 	subject := "Verify your email"
-	body := fmt.Sprintf(
-		"Hi,\r\n\r\nPlease click the link below to verify your email:\r\n%s\r\n\r\nThis link expires in 24 hours.\r\nThanks!",
-		link,
-	)
-
-	// Header đầy đủ để hạn chế vào spam
-	msg := []byte(
-		"From: " + from + "\r\n" +
-			"To: " + toEmail + "\r\n" +
-			"Subject: " + subject + "\r\n" +
-			"MIME-Version: 1.0\r\n" +
-			"Content-Type: text/plain; charset=utf-8\r\n" +
-			"Content-Transfer-Encoding: 8bit\r\n\r\n" +
-			body + "\r\n",
-	)
+	body := fmt.Sprintf("Hi,\r\n\r\nPlease click the link below to verify your email:\r\n%s\r\n\r\nThis link expires in 24 hours.\r\nThanks!", link)
+	msg := []byte("From: " + from + "\r\n" +
+		"To: " + toEmail + "\r\n" +
+		"Subject: " + subject + "\r\n" +
+		"MIME-Version: 1.0\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n" + body + "\r\n")
 
 	addr := net.JoinHostPort(host, port)
-
-	// Implicit TLS (465)
 	if port == "465" {
 		tlsCfg := &tls.Config{ServerName: host}
-		conn, err := tls.Dial("tcp", addr, tlsCfg)
-		if err != nil { return err }
+		conn, err := tls.Dial("tcp", addr, tlsCfg); if err != nil { return err }
 		defer conn.Close()
-
-		c, err := smtp.NewClient(conn, host)
-		if err != nil { return err }
+		c, err := smtp.NewClient(conn, host); if err != nil { return err }
 		defer c.Close()
-
 		if err := c.Auth(smtp.PlainAuth("", user, pass, host)); err != nil { return err }
-		if err := c.Mail(user); err != nil { return err }          // envelope from: dùng user
+		if err := c.Mail(user); err != nil { return err }
 		if err := c.Rcpt(toEmail); err != nil { return err }
-		w, err := c.Data()
-		if err != nil { return err }
+		w, err := c.Data(); if err != nil { return err }
 		if _, err := w.Write(msg); err != nil { _ = w.Close(); return err }
 		if err := w.Close(); err != nil { return err }
 		return c.Quit()
 	}
-
-	// STARTTLS (587) – Gmail chuẩn
 	auth := smtp.PlainAuth("", user, pass, host)
-	// envelope from: dùng user (an toàn với Gmail)
+	return smtp.SendMail(addr, auth, user, []string{toEmail}, msg)
+}
+
+// ===== send reset email =====
+func (h *AuthHandler) sendResetEmail(toEmail, link string) error {
+	host, port := os.Getenv("SMTP_HOST"), os.Getenv("SMTP_PORT")
+	user, pass := os.Getenv("SMTP_USER"), os.Getenv("SMTP_PASS")
+	from := os.Getenv("SMTP_FROM"); if from == "" { from = user }
+	if host == "" || port == "" || user == "" || pass == "" {
+		return fmt.Errorf("missing SMTP config")
+	}
+	subject := "Reset your password"
+	body := fmt.Sprintf("Click this link to reset your password:\r\n%s\r\n\r\nThe link expires in 1 hour.", link)
+	msg := []byte("From: " + from + "\r\n" +
+		"To: " + toEmail + "\r\n" +
+		"Subject: " + subject + "\r\n" +
+		"MIME-Version: 1.0\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n" + body + "\r\n")
+
+	addr := net.JoinHostPort(host, port)
+	if port == "465" {
+		tlsCfg := &tls.Config{ServerName: host}
+		conn, err := tls.Dial("tcp", addr, tlsCfg); if err != nil { return err }
+		defer conn.Close()
+		c, err := smtp.NewClient(conn, host); if err != nil { return err }
+		defer c.Close()
+		if err := c.Auth(smtp.PlainAuth("", user, pass, host)); err != nil { return err }
+		if err := c.Mail(user); err != nil { return err }
+		if err := c.Rcpt(toEmail); err != nil { return err }
+		w, err := c.Data(); if err != nil { return err }
+		if _, err := w.Write(msg); err != nil { _ = w.Close(); return err }
+		if err := w.Close(); err != nil { return err }
+		return c.Quit()
+	}
+	auth := smtp.PlainAuth("", user, pass, host)
 	return smtp.SendMail(addr, auth, user, []string{toEmail}, msg)
 }
 
@@ -125,7 +132,6 @@ type signupReq struct {
 	Password string `json:"password"`
 	FullName string `json:"full_name"`
 }
-
 type loginReq struct {
 	Email    string `json:"email"` // email hoặc username
 	Password string `json:"password"`
@@ -145,7 +151,7 @@ func (h *AuthHandler) Signup(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest); return
 	}
 
-	// Dup checks
+	// dup checks
 	if e, err := h.users.FindByEmail(r.Context(), in.Email); err != nil {
 		http.Error(w, "db error", http.StatusInternalServerError); return
 	} else if e != nil {
@@ -160,8 +166,7 @@ func (h *AuthHandler) Signup(w http.ResponseWriter, r *http.Request) {
 	hash, err := bcrypt.GenerateFromPassword([]byte(in.Password), bcrypt.DefaultCost)
 	if err != nil { http.Error(w, "hash error", http.StatusInternalServerError); return }
 
-	tok, err := randToken(32)
-	if err != nil { http.Error(w, "generate token failed", http.StatusInternalServerError); return }
+	tok, err := randToken(32); if err != nil { http.Error(w, "generate token failed", http.StatusInternalServerError); return }
 	exp := time.Now().Add(24 * time.Hour)
 
 	user := &models.User{
@@ -179,7 +184,6 @@ func (h *AuthHandler) Signup(w http.ResponseWriter, r *http.Request) {
 
 	verifyURL := fmt.Sprintf("%s/verify-email?token=%s", strings.TrimRight(os.Getenv("APP_BASE_URL"), "/"), tok)
 	if err := h.sendVerifyEmail(in.Email, verifyURL); err != nil {
-		// Nếu muốn "fail đăng ký khi gửi mail lỗi", đổi thành: http.Error(..., 500); return
 		fmt.Println("sendVerifyEmail error:", err)
 	}
 
@@ -194,11 +198,7 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid json", http.StatusBadRequest); return
 	}
 
-	var (
-		u   *models.User
-		err error
-	)
-	// Cho phép email hoặc username ở trường "email"
+	var u *models.User; var err error
 	if strings.Contains(in.Email, "@") {
 		u, err = h.users.FindByEmail(r.Context(), in.Email)
 	} else {
@@ -210,18 +210,11 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 	if err := bcrypt.CompareHashAndPassword([]byte(u.PasswordHash), []byte(in.Password)); err != nil {
 		http.Error(w, "invalid credentials", http.StatusUnauthorized); return
 	}
-	if !u.IsVerified {
-		http.Error(w, "email not verified", http.StatusForbidden) // 403
-		return
-	}
+	if !u.IsVerified { http.Error(w, "email not verified", http.StatusForbidden); return }
 
 	claims := jwt.MapClaims{
-		"sub":      u.ID,
-		"email":    u.Email,
-		"username": u.Username,
-		"name":     u.FullName,
-		"exp":      time.Now().Add(24 * time.Hour).Unix(),
-		"iss":      "auth-backend",
+		"sub": u.ID, "email": u.Email, "username": u.Username, "name": u.FullName,
+		"exp": time.Now().Add(24 * time.Hour).Unix(), "iss": "auth-backend",
 	}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	ss, err := token.SignedString(h.jwtSecret)
@@ -232,7 +225,6 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 }
 
 /* ---------- Verify link ---------- */
-// GET /auth/verify?token=xxxx
 func (h *AuthHandler) VerifyEmail(w http.ResponseWriter, r *http.Request) {
 	token := r.URL.Query().Get("token")
 	if token == "" { http.Error(w, "missing token", http.StatusBadRequest); return }
@@ -254,7 +246,6 @@ func (h *AuthHandler) VerifyEmail(w http.ResponseWriter, r *http.Request) {
 }
 
 /* ---------- Resend email ---------- */
-// POST /auth/resend  body: { "email": "abc@xyz.com" }
 func (h *AuthHandler) ResendVerify(w http.ResponseWriter, r *http.Request) {
 	var in struct{ Email string `json:"email"` }
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || in.Email == "" {
@@ -263,23 +254,81 @@ func (h *AuthHandler) ResendVerify(w http.ResponseWriter, r *http.Request) {
 	u, err := h.users.FindByEmail(r.Context(), in.Email)
 	if err != nil { http.Error(w, "db error", http.StatusInternalServerError); return }
 	if u == nil { http.Error(w, "email not found", http.StatusNotFound); return }
-	if u.IsVerified {
-		http.Error(w, "email already verified", http.StatusConflict); return
-	}
+	if u.IsVerified { http.Error(w, "email already verified", http.StatusConflict); return }
 
-	tok, err := randToken(32)
-	if err != nil { http.Error(w, "generate token failed", http.StatusInternalServerError); return }
+	tok, err := randToken(32); if err != nil { http.Error(w, "generate token failed", http.StatusInternalServerError); return }
 	exp := time.Now().Add(24 * time.Hour)
 	if err := h.users.UpdateVerifyToken(r.Context(), u.ID, tok, exp); err != nil {
 		http.Error(w, "db error", http.StatusInternalServerError); return
 	}
-
 	verifyURL := fmt.Sprintf("%s/verify-email?token=%s", strings.TrimRight(os.Getenv("APP_BASE_URL"), "/"), tok)
 	if err := h.sendVerifyEmail(u.Email, verifyURL); err != nil {
 		fmt.Println("sendVerifyEmail error:", err)
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_, _ = w.Write([]byte(`{"message":"verification email resent"}`))
+}
+
+/* ---------- Forgot / Reset password ---------- */
+
+// POST /auth/forgot  { "email": "you@example.com" }
+func (h *AuthHandler) ForgotPassword(w http.ResponseWriter, r *http.Request) {
+	var in struct{ Email string `json:"email"` }
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || in.Email == "" {
+		http.Error(w, "invalid json", http.StatusBadRequest); return
+	}
+	u, err := h.users.FindByEmail(r.Context(), in.Email)
+	if err != nil { http.Error(w, "db error", http.StatusInternalServerError); return }
+
+	// Luôn trả 200 để tránh lộ thông tin có/không có email
+	if u == nil {
+		_ = json.NewEncoder(w).Encode(map[string]any{"message":"if the email exists, a reset link has been sent"})
+		return
+	}
+
+	token, err := randToken(32); if err != nil { http.Error(w, "generate token failed", http.StatusInternalServerError); return }
+	exp := time.Now().Add(1 * time.Hour)
+	if err := h.users.UpdateResetToken(r.Context(), u.ID, token, exp); err != nil {
+		http.Error(w, "db error", http.StatusInternalServerError); return
+	}
+
+	resetURL := fmt.Sprintf("%s/reset-password?token=%s", strings.TrimRight(os.Getenv("APP_BASE_URL"), "/"), token)
+	if err := h.sendResetEmail(u.Email, resetURL); err != nil {
+		fmt.Println("sendResetEmail error:", err)
+	}
+	_ = json.NewEncoder(w).Encode(map[string]any{"message":"reset link sent"})
+}
+
+// POST /auth/reset  { "token":"...", "password":"NewStrong!Pass" }
+func (h *AuthHandler) ResetPassword(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Token    string `json:"token"`
+		Password string `json:"password"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || in.Token == "" || in.Password == "" {
+		http.Error(w, "invalid json", http.StatusBadRequest); return
+	}
+	if err := validatePassword(in.Password); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest); return
+	}
+
+	u, err := h.users.FindByResetToken(r.Context(), in.Token)
+	if err != nil { http.Error(w, "db error", http.StatusInternalServerError); return }
+	if u == nil || u.ResetToken == nil || *u.ResetToken != in.Token {
+		http.Error(w, "invalid token", http.StatusBadRequest); return
+	}
+	if u.ResetExpires != nil && time.Now().After(*u.ResetExpires) {
+		http.Error(w, "token expired", http.StatusBadRequest); return
+	}
+
+	hash, err := bcrypt.GenerateFromPassword([]byte(in.Password), bcrypt.DefaultCost)
+	if err != nil { http.Error(w, "hash error", http.StatusInternalServerError); return }
+	if err := h.users.UpdatePassword(r.Context(), u.ID, string(hash)); err != nil {
+		http.Error(w, "update failed", http.StatusInternalServerError); return
+	}
+	_ = h.users.ClearResetToken(r.Context(), u.ID)
+
+	_ = json.NewEncoder(w).Encode(map[string]any{"message":"password updated"})
 }
 
 /* ---------- Me + middleware ---------- */
@@ -300,10 +349,7 @@ func (h *AuthHandler) Me(w http.ResponseWriter, r *http.Request) {
 	uid, _ := r.Context().Value(ctxUID).(int64)
 
 	_ = json.NewEncoder(w).Encode(map[string]any{
-		"id":        uid,
-		"email":     email,
-		"username":  uname,
-		"full_name": name,
+		"id": uid, "email": email, "username": uname, "full_name": name,
 	})
 }
 
